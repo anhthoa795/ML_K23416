@@ -6,6 +6,10 @@ import seaborn as sns
 import plotly.express as px
 from sklearn.cluster import KMeans
 import numpy as np
+import webbrowser
+import threading
+from flask import render_template_string
+
 app = Flask(__name__)
 def getConnect(server, port, database, username, password):
     try:
@@ -111,3 +115,109 @@ def visualizeKMeans(X, y_kmeans, cluster, title,xlabel,ylabel,colors):
     plt.legend()
     plt.show()
 visualizeKMeans(X,y_kmeans,cluster, "Clusters of Customers - Age X Spending Score", "Age", "Spending Score",colors)
+
+columns = ['Annual Income', 'Spending Score']
+elbowMethod(df2, columns)
+
+X = df2.loc[:,columns].values
+cluster = 5
+y_kmeans, centroids, labels = runKMeans(X, cluster)
+print(y_kmeans)
+print(centroids)
+print(labels)
+df2["cluster"]=labels
+visualizeKMeans(X,y_kmeans,cluster, "Clusters of Customers - Annual Income X Spending Score", "Annual Income", "Spending Score",colors)
+
+def visualize3DKmeans(df,columns,hover_data, cluster):
+    fig = px.scatter_3d(df,
+                        x = columns[0],
+                        y=columns[1],
+                        z=columns[2],
+                        color = 'cluster',
+                        hover_data=hover_data,
+                        category_orders={"cluster": range(0,cluster)},
+                        )
+    fig.update_layout(margin =dict(l=0, r=0, b=0, t=0))
+    fig.show()
+def CustomerDetailsByCluster(conn, df_clustered, cluster_column='cluster'):
+    cursor = conn.cursor()
+    for cluster_id in sorted(df_clustered[cluster_column].unique()):
+        customer_ids = df_clustered[df_clustered[cluster_column] == cluster_id]['CustomerID'].tolist()
+        format_ids = ','.join([f"'{cid}'" for cid in customer_ids])
+        sql = f"SELECT * FROM customer WHERE CustomerID IN ({format_ids})"
+        cursor.execute(sql)
+        rows = cursor.fetchall()
+        print(f"\n Cluster {cluster_id + 1} - Total Customers: {len(rows)}")
+        for row in rows:
+            print(row)
+
+@app.route('/show_clusters/<int:cluster_count>')
+def showClusters(cluster_count):
+    columns = ['Age', 'Annual Income', 'Spending Score']
+    X = df2.loc[:, columns].values
+    y_kmeans, centroids, labels = runKMeans(X, cluster_count)
+    df2['cluster'] = labels
+
+    cluster_data = {}
+    cursor = conn.cursor()
+    for cluster_id in sorted(df2['cluster'].unique()):
+        customer_ids = df2[df2['cluster'] == cluster_id]['CustomerID'].tolist()
+        format_ids = ','.join([f"'{cid}'" for cid in customer_ids])
+        sql = f"SELECT * FROM customer WHERE CustomerID IN ({format_ids})"
+        cursor.execute(sql)
+        rows = cursor.fetchall()
+        cluster_data[f'Cluster {cluster_id + 1}'] = rows
+
+    html_template = """
+    <html>
+    <head><title>Customer Clusters</title></head>
+    <body>
+        <h1>Customer Clusters ({{ cluster_count }} groups)</h1>
+        {% for cluster_name, customers in cluster_data.items() %}
+            <h2>{{ cluster_name }} - Total: {{ customers|length }}</h2>
+            <table border="1" cellpadding="5">
+                <tr>
+                    {% for col in column_names %}
+                        <th>{{ col }}</th>
+                    {% endfor %}
+                </tr>
+                {% for customer in customers %}
+                    <tr>
+                        {% for value in customer %}
+                            <td>{{ value }}</td>
+                        {% endfor %}
+                    </tr>
+                {% endfor %}
+            </table>
+            <br>
+        {% endfor %}
+    </body>
+    </html>
+    """
+    column_names = [desc[0] for desc in cursor.description]
+    return render_template_string(html_template, cluster_data=cluster_data, column_names=column_names, cluster_count=cluster_count)
+
+columns = ['Age', 'Annual Income', 'Spending Score']
+elbowMethod(df2, columns)
+
+X = df2.loc[:,columns].values
+cluster = 6
+y_kmeans, centroids, labels = runKMeans(X, cluster)
+print(y_kmeans)
+print(centroids)
+print(labels)
+df2["cluster"]=labels
+
+hover_data=df2.columns
+visualize3DKmeans(df2,columns,hover_data,cluster)
+
+CustomerDetailsByCluster(conn,df2)
+
+last_cluster_count = cluster
+
+def open_browser():
+    webbrowser.open_new(f"http://localhost:5000/show_clusters/{last_cluster_count}")
+
+if __name__ == '__main__':
+    threading.Timer(1.5, open_browser).start()
+    app.run(debug=True, use_reloader=False)
